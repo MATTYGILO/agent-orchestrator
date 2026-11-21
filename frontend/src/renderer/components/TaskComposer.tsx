@@ -238,11 +238,12 @@ function base64Bytes(data: string): number {
 	return Math.floor((data.length * 3) / 4) - padding;
 }
 
-export function useTaskLaunch({ projectId, hostId, prepare = true, preferChat = false }: {
+export function useTaskLaunch({ projectId, hostId, prepare = true, preferChat = false, chatOnly = false }: {
 	projectId?: string;
 	hostId?: string;
 	prepare?: boolean;
 	preferChat?: boolean;
+	chatOnly?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -1028,6 +1029,7 @@ export function useTaskLaunch({ projectId, hostId, prepare = true, preferChat = 
 	// local project's come from the daemon.
 	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
 	const wantsChat = preferChat || settings?.defaultSessionMode === "chat";
+	const chatCompatible = isChatOnlyAgent(selectedAgent) || Boolean(chatHarnesses?.includes(selectedAgent));
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		wantsChat &&
@@ -1118,6 +1120,7 @@ export function useTaskLaunch({ projectId, hostId, prepare = true, preferChat = 
 	// and its default-Chat-to-TUI fallback once initial discovery settles.
 	const canSubmit =
 		hostConnected &&
+		(!chatOnly || chatCompatible) &&
 		Boolean(projectId) &&
 		!cloudCatalogLoading &&
 		(!usesChatPermissions || !permissionDiscovery.isPending) &&
@@ -1525,6 +1528,7 @@ export function useTaskLaunch({ projectId, hostId, prepare = true, preferChat = 
 		submitMode,
 		isCloudProject,
 		isCoderCloudProject,
+		chatCompatible,
 		canSubmit,
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
@@ -1564,7 +1568,7 @@ export function useTaskLaunch({ projectId, hostId, prepare = true, preferChat = 
 			label: t("newTask.agent"),
 			placeholder: t("newTask.selectAgent"),
 			value: selectedAgent,
-			agents: isCloudProject ? cloudAgents : agentCatalog?.agents,
+			agents: (isCloudProject ? cloudAgents : agentCatalog?.agents)?.filter((candidate) => !chatOnly || isChatOnlyAgent(candidate.id) || chatHarnesses?.includes(candidate.id)),
 			disabled:
 				isSubmitting || (!isCloudProject && agentsQuery.isFetching && agentCatalog === undefined),
 			onChange: changeAgent,

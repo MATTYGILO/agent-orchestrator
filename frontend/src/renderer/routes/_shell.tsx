@@ -1,5 +1,6 @@
+import { showDeepWorkAccessNotice } from "../lib/deep-work-navigation";
 import { Button } from "../components/ui/button";
-import { deepWorkRouteBlocked, NEW_TASK_ON_SHALLOW, shallowAccessMessage, shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
+import { deepWorkRouteBlocked, shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
@@ -154,7 +155,7 @@ export const Route = createFileRoute("/_shell")({
 	beforeLoad: ({ location, preload }) => {
 		const state = useDeepWorkStore.getState();
 		if (!deepWorkRouteBlocked(location.pathname, state)) return;
-		if (!preload) useUiStore.getState().showGlobalToast(shallowWorkHidden(state) ? shallowAccessMessage(state) : NEW_TASK_ON_SHALLOW);
+		if (!preload) showDeepWorkAccessNotice(state);
 		throw redirect({ to: "/", replace: true });
 	},
 	// Prefetch the workspace list for the whole shell (parent loaders run before
@@ -197,7 +198,7 @@ function AllowedSharedArtifactLinkHost() {
 
 function refuseShallowWork() {
 	if (!shallowWorkHidden(useDeepWorkStore.getState())) return false;
-	useUiStore.getState().showGlobalToast(shallowAccessMessage());
+	showDeepWorkAccessNotice();
 	return true;
 }
 

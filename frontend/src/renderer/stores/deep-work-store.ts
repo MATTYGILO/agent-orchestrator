@@ -5,16 +5,26 @@ export const DEFAULT_UNLOCK_TIMES = ["11:00", "16:00", "20:00"];
 const STORAGE_KEY = "ao.deepWork.v1";
 const WALL_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
-export type DeepWorkTask = {
-	id: string;
-	projectId: string;
-	hostId?: string;
-	stage: "brainstorming" | "alignment";
+export type PlanningJournal = {
 	title: string;
 	notes: string;
 	questions: string[];
-	handoff: string;
-	pending?: { requestId: string; replay: LaunchReplay };
+};
+
+export type DeepWorkTask = PlanningJournal & {
+	id: string;
+	projectId: string;
+	hostId?: string;
+	stage: "journal" | "chat" | "handoff";
+	planningSessionId?: string;
+	generation?: { requestId: string; turnId?: string };
+	handoff?: string;
+	buildRequest?: { requestId: string; replay: LaunchReplay; text: string };
+	workerSessionId?: string;
+	delivered?: PlanningJournal;
+	pending?:
+		| { kind: "start"; requestId: string; replay: LaunchReplay; text: string; journal: PlanningJournal }
+		| { kind: "update"; requestId: string; text: string; journal: PlanningJournal };
 };
 
 type DeepWorkState = {
@@ -64,7 +74,14 @@ function readState(): DeepWorkState {
 	try {
 		const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as DeepWorkState | null;
 		if (saved && Array.isArray(saved.times) && saved.times.every((time) => WALL_TIME.test(time))) {
-			return { ...defaults, ...saved };
+			const task = saved.task;
+			// The first local prototype held a separate manual handoff. Restore its
+			// journal, without replaying a request for that superseded workflow.
+			const restoredTask = task && (task.stage === "journal" || task.stage === "chat" || task.stage === "handoff") ? task : task && {
+				id: task.id, projectId: task.projectId, hostId: task.hostId,
+				stage: "journal" as const, title: task.title, notes: task.notes, questions: task.questions,
+			};
+			return { ...defaults, ...saved, task: restoredTask };
 		}
 	} catch {
 		// A profile without saved state starts in normal mode.
@@ -117,7 +134,7 @@ export const useDeepWorkStore = create<DeepWorkStore>((set, get) => {
 		beginTask: (projectId, hostId) => {
 			const state = get();
 			if (!state.enabled || state.side !== "deep" || state.task) return false;
-			return update({ task: { id: crypto.randomUUID(), projectId, hostId, stage: "brainstorming", title: "", notes: "", questions: [], handoff: "" } });
+			return update({ task: { id: crypto.randomUUID(), projectId, hostId, stage: "journal", title: "", notes: "", questions: [] } });
 		},
 		updateTask: (id, fields) => {
 			const task = get().task;
@@ -137,11 +154,3 @@ export function deepWorkRouteBlocked(pathname: string, state: Pick<DeepWorkState
 	if (state.side === "shallow") return path === "/new";
 	return path !== "/" && path !== "/settings";
 }
-
-export function shallowAccessMessage(state = useDeepWorkStore.getState()) {
-	return state.task
-		? "Finish or discard the current Deep Work task before opening other work."
-		: "Switch to Shallow to open sessions, activity and pull requests.";
-}
-
-export const NEW_TASK_ON_SHALLOW = "Return to Deep to start a new task.";

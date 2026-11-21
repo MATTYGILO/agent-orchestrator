@@ -119,6 +119,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	newWorkDisabled,
 	arriving,
 	onConversationWorkChange,
+	planning = false,
 	interfaceSwitch,
 }: {
 	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
@@ -190,6 +191,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	arriving?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
+	planning?: boolean;
 }) {
 	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
@@ -341,10 +343,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const accountSwitch = useSessionAccountSwitch(session, hostId ?? session.hostId);
 	const account = accountSwitch.choice;
 	const agentSwitch = useMemo(
-		() => currentHarness && !session.cloud && !newWorkDisabled
+		() => currentHarness && !session.cloud && !newWorkDisabled && !planning
 			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact, account }
 			: undefined,
-		[account, autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+		[account, autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, planning, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
@@ -466,7 +468,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		revealPending();
 		return subscribeSessionSearchReveal(uiSessionId, revealPending);
 	}, [onSelectChat, uiSessionId]);
-	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
+	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable && !planning;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
 		const ui = useUiStore.getState();
@@ -699,7 +701,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			{accountSwitch.dialog}
-			<ForkSessionContext.Provider value={session}>
+			<ForkSessionContext.Provider value={planning ? null : session}>
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
@@ -890,7 +892,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				// A Scratchpad session has no project to remember a mode for.
-				onRememberPermissions={session.workspaceId === STANDALONE_WORKSPACE_ID || (can(renderSnapshot, "config_options") && !configOptions.loaded)
+				onRememberPermissions={planning || session.workspaceId === STANDALONE_WORKSPACE_ID || (can(renderSnapshot, "config_options") && !configOptions.loaded)
 					? undefined : projectPermissions.remember}
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
@@ -902,8 +904,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onCompact={commands.compact}
 				compacting={commands.compacting}
 				compactUnavailable={commands.compactUnavailable}
-				onRollback={commands.rollback}
-				onPreviewRollback={commands.previewRollback}
+				onRollback={planning ? undefined : commands.rollback}
+				onPreviewRollback={planning ? undefined : commands.previewRollback}
 				rollbackPending={commands.rollbackPending}
 				rollbackError={commands.rollbackError}
 				onOpenFiles={onOpenFiles}

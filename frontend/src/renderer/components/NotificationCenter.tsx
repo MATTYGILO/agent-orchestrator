@@ -1,4 +1,5 @@
-import { shallowAccessMessage, shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
+import { showDeepWorkAccessNotice } from "../lib/deep-work-navigation";
+import { shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
 import { AppLink } from "./AppLink";
 import { CloudMark } from "./CloudMark";
 import { useQueryClient } from "@tanstack/react-query";
@@ -315,7 +316,7 @@ export function NotificationRuntime() {
 	useEffect(() => {
 		return aoBridge.notifications.onClick((id) => {
 			if (shallowWorkHidden(useDeepWorkStore.getState())) {
-				useUiStore.getState().showGlobalToast(shallowAccessMessage());
+				showDeepWorkAccessNotice();
 				return;
 			}
 			if (id.startsWith(CLOUD_NOTIFICATION_PREFIX)) {

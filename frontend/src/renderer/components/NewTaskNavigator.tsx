@@ -1,4 +1,5 @@
-import { NEW_TASK_ON_SHALLOW, shallowAccessMessage, useDeepWorkStore } from "../stores/deep-work-store";
+import { showDeepWorkAccessNotice } from "../lib/deep-work-navigation";
+import { useDeepWorkStore } from "../stores/deep-work-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -59,7 +60,7 @@ export function NewTaskNavigator() {
 		const deepWork = useDeepWorkStore.getState();
 		if (deepWork.enabled && (deepWork.side === "shallow" || deepWork.task)) {
 			lastNonce.current = newTaskRequest.nonce;
-			useUiStore.getState().showGlobalToast(deepWork.side === "shallow" ? NEW_TASK_ON_SHALLOW : shallowAccessMessage(deepWork));
+			showDeepWorkAccessNotice(deepWork);
 			return;
 		}
 		const cloudProject = hostId ? undefined : cloudProjects?.find((project) => project.id === projectId);

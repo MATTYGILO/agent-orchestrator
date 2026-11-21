@@ -48,8 +48,8 @@ describe("Deep Work schedule and focus", () => {
 		expect(current().beginTask("project", "remote")).toBe(true);
 		const id = current().task!.id;
 		current().updateTask(id, {
-			stage: "alignment", title: "Journal", notes: "Ideas", questions: ["Which one?"], handoff: "Build plan A",
-			pending: { requestId: "retry", replay: { agent: "codex", mode: "chat" } },
+			stage: "handoff", planningSessionId: "planner", title: "Journal", notes: "Ideas", questions: ["Which one?"], handoff: "Build plan A",
+			buildRequest: { requestId: "retry", text: "Build plan A", replay: { agent: "codex", mode: "chat" } },
 		});
 		vi.resetModules();
 		const restored = (await import("./deep-work-store")).useDeepWorkStore.getState;

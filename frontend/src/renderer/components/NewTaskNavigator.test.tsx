@@ -97,7 +97,7 @@ describe("NewTaskNavigator", () => {
 		renderNavigator();
 		act(() => useUiStore.getState().requestNewTask("proj-1"));
 		const task = useDeepWorkStore.getState().task;
-		expect(task).toMatchObject({ stage: "brainstorming", projectId: "proj-1" });
+		expect(task).toMatchObject({ stage: "journal", projectId: "proj-1" });
 		act(() => useUiStore.getState().requestNewTask("coder-1"));
 		expect(useDeepWorkStore.getState().task).toBe(task);
 		act(() => useDeepWorkStore.setState({ side: "shallow", task: undefined }));

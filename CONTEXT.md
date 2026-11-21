@@ -5,11 +5,11 @@ details, no decisions (those live in `docs/adr/`).
 
 ## Deep Work Mode
 
-- **Deep** — the Brainstorming and Alignment columns. One task holds focus here until its handoff succeeds or the task is discarded.
-- **Brainstorming** — a human-only journal with queued questions.
-- **Alignment** — the same task, with the journal and questions available while the user prepares the handoff prompt.
+- **Deep** — the Planning lane. One task holds focus here until it is explicitly discarded or handed off.
+- **Planning journal** — the task's human-only notes and queued questions. Continue sends new context to Planning Chat.
+- **Planning Chat** — one conversation for the same task, used to gather context and answer questions. Back to journal returns to the same notes and questions.
+- **Worker handoff** — a prompt prepared in Planning Chat and reviewed by the user. Confirm launches a fresh implementation worker with that prompt.
 - **Shallow** — the Building, Validating, In review and Ready columns, where agents, questions and pull requests can be reviewed. A daily local unlock allows one visit, which ends on Return to Deep.
-- **Handoff prompt** — the explicit instruction sent when the user selects Start building.
 
 ## Daemon surfaces
 
