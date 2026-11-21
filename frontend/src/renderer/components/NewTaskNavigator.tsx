@@ -1,3 +1,4 @@
+import { NEW_TASK_ON_SHALLOW, shallowAccessMessage, useDeepWorkStore } from "../stores/deep-work-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -23,6 +24,7 @@ export const CLOUD_CLASSIFY_WAIT_MS = 4000;
 // their own start-up.
 export function NewTaskNavigator() {
 	const navigate = useNavigate();
+	const deepWorkEnabled = useDeepWorkStore((state) => state.enabled);
 	const router = useRouter();
 	const queryClient = useQueryClient();
 	const newTaskRequest = useUiStore((state) => state.newTaskRequest);
@@ -54,6 +56,12 @@ export function NewTaskNavigator() {
 	useEffect(() => {
 		if (!newTaskRequest || newTaskRequest.nonce === lastNonce.current) return;
 		const { projectId, hostId, report } = newTaskRequest;
+		const deepWork = useDeepWorkStore.getState();
+		if (deepWork.enabled && (deepWork.side === "shallow" || deepWork.task)) {
+			lastNonce.current = newTaskRequest.nonce;
+			useUiStore.getState().showGlobalToast(deepWork.side === "shallow" ? NEW_TASK_ON_SHALLOW : shallowAccessMessage(deepWork));
+			return;
+		}
 		const cloudProject = hostId ? undefined : cloudProjects?.find((project) => project.id === projectId);
 		// A request for a project the lists can't place yet waits for them, so it
 		// never opens a new task in an agent (the shortcut on an agent's session
@@ -83,6 +91,10 @@ export function NewTaskNavigator() {
 		const sharedAgent = !hostId && !cloudProject &&
 			Boolean(sharedWorkspaces?.some((workspace) => workspace.id === projectId && workspace.standaloneAgent));
 		const target = cloudProject?.standaloneAgent ? CLOUD_STANDALONE_WORKSPACE_ID : sharedAgent ? STANDALONE_WORKSPACE_ID : projectId;
+		if (deepWork.enabled) {
+			if (deepWork.beginTask(target ?? STANDALONE_WORKSPACE_ID, hostId)) useUiStore.getState().closeSettings();
+			return;
+		}
 		if (cloudProject && !cloudProject.standaloneAgent && projectSandboxProvider(cloudProject.config, cloudOffering) === CODER_PROVIDER) {
 			// An open dialog keeps its form rather than retargeting to another project.
 			setDialog((current) => current.open ? current : { open: true, projectId, hostId });
@@ -108,7 +120,7 @@ export function NewTaskNavigator() {
 
 	return (
 		<NewTaskDialog
-			open={dialog.open}
+			open={dialog.open && !deepWorkEnabled}
 			projectId={dialog.projectId}
 			hostId={dialog.hostId}
 			onProjectChange={(projectId) => setDialog((current) => ({ ...current, projectId }))}

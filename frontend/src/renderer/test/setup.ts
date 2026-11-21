@@ -454,6 +454,7 @@ if (typeof window !== "undefined") {
 			onImportProgress: () => () => undefined,
 		},
 		notifications: {
+			setPreviewsHidden: async () => undefined,
 			show: async () => undefined,
 			setBadge: async () => undefined,
 			devBounce: async () => undefined,

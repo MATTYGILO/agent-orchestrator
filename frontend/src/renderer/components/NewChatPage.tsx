@@ -8,7 +8,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
+import { sendIsUncertain } from "../lib/task-launch-outcome";
 import { dropReportPrompt, sessionNameFromBrief } from "../lib/report-problem";
 import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
@@ -594,27 +594,6 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 
 // Errors raised after the daemon may have created the session: a retry with the
 // same request id must be possible, so these never count as a final refusal.
-const POST_START_ERRORS = new Set([
-	"SPAWN_COMMIT_FAILED", "SPAWN_INTERNAL", "SPAWN_PROMPT_DELIVERY_FAILED", "SPAWN_LAUNCH_COMMAND_FAILED",
-	"SPAWN_SUPERVISOR_FAILED", "SPAWN_PREPARE_LAUNCH_FAILED", "RUNTIME_CREATE_FAILED",
-]);
-
-/**
- * A send whose outcome is unknown: no answer, a server error (the create may
- * have gone through before it failed), a rate limit that names no plan limit,
- * or a failure after the session may exist.
- */
-function sendIsUncertain(error: unknown): boolean {
-	if (!(error instanceof Error)) return true;
-	const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
-	const status = "status" in error && typeof error.status === "number" ? error.status : undefined;
-	if (status !== undefined && (status === 0 || status >= 500)) return true;
-	// A plan's limit has its own message and its Upgrade; any other 429 is retried.
-	if (status === 429) return !(code && PLAN_REFUSAL_CODES.has(code));
-	if (code) return POST_START_ERRORS.has(code);
-	return error.name !== "TaskCreateError";
-}
-
 type PendingLaunch = { clientMessageId: string; projectId: string; replay: LaunchReplay; settings: LaunchSettings };
 const PENDING_LAUNCH_KEY = "ao.newTask.pendingLaunch.v1";
 

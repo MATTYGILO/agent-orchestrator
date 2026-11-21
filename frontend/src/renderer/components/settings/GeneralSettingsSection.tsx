@@ -9,6 +9,7 @@ import { useSoundNotificationsStore } from "../../stores/sound-notifications-sto
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
+import { DeepWorkSettings } from "./DeepWorkSettings";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { CliShadowSettingsRow } from "./CliShadowSettingsRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
@@ -526,6 +527,7 @@ export function GeneralSettingsSection({
 				{IS_DEV && developerMode && <SimulateNewMachineRow />}
 				{IS_DEV && developerMode && <ReplayOnboardingRow />}
 			</SettingsSection>
+			<DeepWorkSettings />
 		</>
 	);
 }

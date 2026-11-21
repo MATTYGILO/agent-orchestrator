@@ -1,3 +1,4 @@
+import { shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
 import { apiErrorException } from "./api-error-exception";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
@@ -546,7 +547,7 @@ export function createNotificationsTransport(
 				}
 				const inserted = mergeUnreadNotification(queryClient, event.notification);
 				mergeRecentNotification(queryClient, event.notification);
-				if (inserted) {
+				if (inserted && !shallowWorkHidden(useDeepWorkStore.getState())) {
 					void aoBridge.notifications.show({
 						id: event.notification.id,
 						title: event.notification.title,

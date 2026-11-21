@@ -888,6 +888,7 @@ const api = {
 		},
 	},
 	notifications: {
+		setPreviewsHidden: (hidden: boolean) => ipcRenderer.invoke("notifications:setPreviewsHidden", hidden) as Promise<void>,
 		show: (notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) =>
 			ipcRenderer.invoke("notifications:show", notification) as Promise<void>,
 		setBadge: (count: number) => ipcRenderer.invoke("notifications:setBadge", count) as Promise<void>,

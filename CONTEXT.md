@@ -3,6 +3,14 @@
 Canonical vocabulary for Agent Orchestrator. Terms only — no implementation
 details, no decisions (those live in `docs/adr/`).
 
+## Deep Work Mode
+
+- **Deep** — the Brainstorming and Alignment columns. One task holds focus here until its handoff succeeds or the task is discarded.
+- **Brainstorming** — a human-only journal with queued questions.
+- **Alignment** — the same task, with the journal and questions available while the user prepares the handoff prompt.
+- **Shallow** — the Building, Validating, In review and Ready columns, where agents, questions and pull requests can be reviewed. A daily local unlock allows one visit, which ends on Return to Deep.
+- **Handoff prompt** — the explicit instruction sent when the user selects Start building.
+
 ## Daemon surfaces
 
 - **Loopback Listener** — the daemon's original, always-on HTTP surface bound to

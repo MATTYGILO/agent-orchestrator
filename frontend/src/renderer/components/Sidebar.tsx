@@ -1,3 +1,4 @@
+import { shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
@@ -741,6 +742,7 @@ export const Sidebar = memo(function Sidebar({
 	resizeAuxiliaryTargetRef,
 }: SidebarProps) {
 	const { t } = useTranslation();
+	const deep = useDeepWorkStore(shallowWorkHidden);
 	const remoteNavigate = useNavigate();
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
@@ -1159,7 +1161,7 @@ export const Sidebar = memo(function Sidebar({
 
 			{settingsPage ? (
 				<SettingsSidebarNav layer={settingsPage} />
-			) : (
+			) : deep ? null : (
 			<>
 			{/* Keep Search + section chrome fixed above the scrollable sidebar content. */}
 			<div className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">

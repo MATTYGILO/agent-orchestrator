@@ -404,6 +404,7 @@ export const aoBridge: AoBridge =
 			onImportProgress: () => () => undefined,
 		},
 		notifications: {
+			setPreviewsHidden: async () => undefined,
 			show: async () => undefined,
 			setBadge: async () => undefined,
 			devBounce: async () => undefined,

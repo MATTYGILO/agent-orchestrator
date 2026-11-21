@@ -192,29 +192,37 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 		return attentionPriority || right.updatedAt.localeCompare(left.updatedAt);
 	});
 	return (
-		<section
-			aria-label={labels.columnAria(column.label)}
-			className="flex min-w-0 flex-col overflow-hidden"
-			data-testid="board-column"
-			data-column={column.column}
-		>
+		<BoardColumnFrame id={column.column} label={column.label} ariaLabel={labels.columnAria(column.label)}
+			dot={column.dot} titleClassName={column.titleClassName} count={ordered.length}>
+			{ordered.map((session) => (
+				<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
+			))}
+		</BoardColumnFrame>
+	);
+}
+
+export function BoardColumnFrame({ id, label, ariaLabel = label, dot, titleClassName, count, children }: {
+	id: string;
+	label: string;
+	ariaLabel?: string;
+	dot: string;
+	titleClassName?: string;
+	count: number;
+	children?: ReactNode;
+}) {
+	return (
+		<section aria-label={ariaLabel} className="flex min-w-0 flex-col overflow-hidden" data-testid="board-column" data-column={id}>
 			<div className="flex h-12 shrink-0 items-center gap-2.5 px-4">
 				<span
 					data-testid="board-column-swatch"
 					className="size-[var(--size-swatch)] rounded-full"
-					style={{ backgroundColor: column.dot }}
+					style={{ backgroundColor: dot }}
 				/>
-				<span className={cn("text-xs font-medium", column.titleClassName)}>
-					{column.label}
-				</span>
-				<span className="ml-auto tabular-nums text-xs leading-none text-passive">{ordered.length}</span>
+				<span className={cn("text-xs font-medium", titleClassName)}>{label}</span>
+				<span className="ml-auto tabular-nums text-xs leading-none text-passive">{count}</span>
 			</div>
 			<div className="scrollbar-none min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
-				<div className="flex min-h-full flex-col gap-2.5">
-					{ordered.map((session) => (
-						<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
-					))}
-				</div>
+				<div className="flex min-h-full flex-col gap-2.5">{children}</div>
 			</div>
 		</section>
 	);

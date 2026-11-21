@@ -1,9 +1,11 @@
+import { Button } from "../components/ui/button";
+import { deepWorkRouteBlocked, NEW_TASK_ON_SHALLOW, shallowAccessMessage, shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, redirect, useMatch, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "@/components/app-icons";
@@ -116,6 +118,9 @@ const OrchestratorStartingChat = lazy(() =>
 	loadOrchestratorStartingChat().then((module) => ({ default: module.OrchestratorStartingChat })),
 );
 
+const DeepWorkPage = lazy(() => import("../components/DeepWork").then(({ DeepWorkPage }) => ({ default: DeepWorkPage })));
+const DeepWorkSwitcher = lazy(() => import("../components/DeepWork").then(({ DeepWorkSwitcher }) => ({ default: DeepWorkSwitcher })));
+
 const EMPTY_PAUSE_PROJECTS: never[] = [];
 function preloadOrchestratorStartingChat(): void {
 	void loadOrchestratorStartingChat().catch(() => undefined);
@@ -146,6 +151,12 @@ function lastProjectId(workspaces: WorkspaceSummary[]): string | undefined {
 }
 
 export const Route = createFileRoute("/_shell")({
+	beforeLoad: ({ location, preload }) => {
+		const state = useDeepWorkStore.getState();
+		if (!deepWorkRouteBlocked(location.pathname, state)) return;
+		if (!preload) useUiStore.getState().showGlobalToast(shallowWorkHidden(state) ? shallowAccessMessage(state) : NEW_TASK_ON_SHALLOW);
+		throw redirect({ to: "/", replace: true });
+	},
 	// Prefetch the workspace list for the whole shell (parent loaders run before
 	// children); pairs with the router's defaultPreload: "intent" so a hovered
 	// nav target is warm before the click.
@@ -174,9 +185,20 @@ function ShellLayoutWithSettings() {
 			<ShellLayout />
 			{/* Outside ShellLayout, so links it holds survive every route and the
 			    startup loader that replaces the shell while the daemon restarts. */}
-			<SharedArtifactLinkHost />
+			<AllowedSharedArtifactLinkHost />
 		</SettingsProvider>
 	);
+}
+
+function AllowedSharedArtifactLinkHost() {
+	const hidden = useDeepWorkStore(shallowWorkHidden);
+	return hidden ? null : <SharedArtifactLinkHost />;
+}
+
+function refuseShallowWork() {
+	if (!shallowWorkHidden(useDeepWorkStore.getState())) return false;
+	useUiStore.getState().showGlobalToast(shallowAccessMessage());
+	return true;
 }
 
 /**
@@ -355,6 +377,14 @@ function ShellLayout() {
 	const router = useRouter();
 	const canGoForward = useCanGoForward();
 	const settingsPage = useSettingsPage();
+	const deep = useDeepWorkStore(shallowWorkHidden);
+	const deepWorkEnabled = useDeepWorkStore((state) => state.enabled);
+	const routeBlocked = useRouterState({ select: (state) =>
+		deepWorkRouteBlocked((state.resolvedLocation ?? state.location).pathname, { enabled: deepWorkEnabled, side: deep ? "deep" : "shallow" }),
+	});
+	useEffect(() => {
+		if (routeBlocked) void navigate({ to: "/", replace: true });
+	}, [routeBlocked, navigate]);
 	// One string, so a session switch (same kind of route) does not re-render the shell
 	// while the router loads; useMatchRoute would on every location and status change.
 	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
@@ -383,7 +413,7 @@ function ShellLayout() {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
-	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
+	useAutoSpawnPauseNotice(deep ? EMPTY_PAUSE_PROJECTS : [...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
@@ -490,7 +520,7 @@ function ShellLayout() {
 		.flatMap((workspace) => workspace.sessions)
 		.find((session) => session.id === routeParams.sessionId && session.hostId === routeParams.hostId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
-	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
+	const canOpenBrowserLink = !deep && linkSession?.kind === "worker" && sessionIsActive(linkSession);
 	useEffect(() => {
 		document.addEventListener("click", handleModifierLinkClick);
 		return () => document.removeEventListener("click", handleModifierLinkClick);
@@ -707,6 +737,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, []);
 	const openNavSession = useCallback(
 		(entry: SidebarNavSession) => {
+			if (refuseShallowWork()) return;
 			if (entry.session.kind === "worker") recordManualWorkerOpen(sessionUiKey(entry.sessionId, entry.hostId));
 			void navigate(sessionNavigateTarget(entry.projectId, entry.sessionId, entry.hostId));
 		},
@@ -715,7 +746,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const navigateSession = useCallback(
 		(direction: -1 | 1, onlyNeedingAttention = false) => {
 			// The settings page owns these chords while it is open (they step its sections).
-			if (useUiStore.getState().settingsModal?.scope === "global") return;
+			if (useUiStore.getState().settingsModal?.scope === "global" || refuseShallowWork()) return;
 			const target = stepSessionNav(
 				sidebarSessionOrder(),
 				{ sessionId: routeParams.sessionId, hostId: routeParams.hostId },
@@ -1316,10 +1347,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// These arrive from the main process (see main/app-shortcuts.ts) so they also
 	// fire while xterm or a native Browser view holds focus.
 	useAppShortcut("toggle-sidebar", () => toggleSidebar());
+	useAppShortcut("command-palette", () => { refuseShallowWork(); }, deep);
 	useAppShortcut("jump-to-session", ({ index }) => {
 		// The palette's own list claims the digits while it is open.
 		if (useUiStore.getState().isCommandPaletteOpen) return;
-		if (useUiStore.getState().settingsModal?.scope === "global") return;
+		if (useUiStore.getState().settingsModal?.scope === "global" || refuseShallowWork()) return;
 		const target = index === undefined ? undefined : sidebarSessionOrder()[index];
 		if (target) openNavSession(target);
 	});
@@ -1405,7 +1437,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(
 		() =>
 			onDedicatedShortcut("new-shell-terminal", (handler) => aoBridge.app.onNewShellTerminalShortcut(handler), () => {
-				if (routeParams.sessionId) requestNewShellTerminal();
+				if (!refuseShallowWork() && routeParams.sessionId) requestNewShellTerminal();
 			}),
 		[requestNewShellTerminal, routeParams.sessionId],
 	);
@@ -1417,7 +1449,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(() => {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
-		if (!routeParams.sessionId) return;
+		if (refuseShallowWork() || !routeParams.sessionId) return;
 		const shell = openShellTerminal.open({
 			projectId: routeParams.hostId ? routeParams.projectId : scopedProjectId,
 			sessionId: routeParams.sessionId,
@@ -1475,6 +1507,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const pendingSessionDeepLinkRef = useRef<string | null>(null);
 	const handleSessionDeepLink = useCallback(
 		(rawUrl: string) => {
+			if (refuseShallowWork()) return;
 			const link = `ao://${rawUrl.slice("ao-app://".length)}`;
 			const artifact = parseArtifactLink(link);
 			const target = parseSessionLink(link) ?? artifact;
@@ -1523,6 +1556,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	);
 	useEffect(() => {
 		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {
+			if (refuseShallowWork()) return;
 			if (!sessionDeepLinksReady) {
 				pendingSessionDeepLinkRef.current = rawUrl;
 				return;
@@ -1607,7 +1641,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<NotificationRuntime />
 				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
 				<TrayRuntime />
-				<SharedWithYouNotifier />
+				{!deep ? <SharedWithYouNotifier /> : null}
 				{isDragActive ? (
 					<div
 						aria-hidden="true"
@@ -1627,10 +1661,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<NewTaskNavigator />
 				<FirstRunOnboarding />
 				<GuidedTour />
-				<ArchiveModalHost />
+				{!deep ? <ArchiveModalHost /> : null}
 				<GlobalToast />
 				<RestartToUpdateDialog />
-				<SessionImportDialog />
+				{!deep ? <SessionImportDialog /> : null}
 				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
@@ -1709,9 +1743,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>
 						<div className="relative min-h-0 flex-1 overflow-x-hidden" ref={centerPaneRef}>
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
-							<ShellCenter
+							{deep ? (
+								<CenterPanelShell>
+									<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsPage && "hidden")}>
+										{!routeBlocked && routeKind === "settings" ? <Outlet /> : null}
+										<Suspense fallback={null}>
+											<DeepWorkPage workspaces={[...workspaces, ...(remoteWorkspaces ?? [])]} />
+										</Suspense>
+									</div>
+									<SettingsPane />
+									{settingsPage ? <div className="absolute bottom-4 right-4 z-20">
+										<Button size="sm" variant="secondary" onClick={settingsPage.close}>Done</Button>
+									</div> : null}
+								</CenterPanelShell>
+							) : !routeBlocked ? <ShellCenter
 								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
-								isHomeRoute={isHomeRoute}
+								isHomeRoute={isHomeRoute && !deepWorkEnabled}
 								isNewChatRoute={isNewChatRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
@@ -1719,13 +1766,14 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								startingSteps={startingSteps}
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
 								startingHarness={startingWorkspace?.orchestratorAgent ?? startingOrchestratorSession?.provider}
-							/>
-							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
+							/> : null}
+							{deepWorkEnabled ? <Suspense fallback={null}><DeepWorkSwitcher /></Suspense> : null}
+							{!deep ? <SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
 								canGoBack: !isHomeRoute && router.history.canGoBack(),
 								canGoForward,
 								back: () => router.history.back(),
 								forward: () => router.history.forward(),
-							}} />
+							}} /> : null}
 						</div>
 						</main>
 					</div>
@@ -1782,7 +1830,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						zoomFactor={windowZoomFactor}
 					/>
 				</SidebarProvider>
-				<OrchestratorReplacementDialog
+				{!deep ? <OrchestratorReplacementDialog
 					pending={Boolean(replacementErrorProjectId && restartingProjectIds.has(replacementErrorProjectId))}
 					pendingCount={replacementErrorCount}
 					error={replacementErrorProjectId ? orchestratorReplacementErrors[replacementErrorProjectId] : undefined}
@@ -1796,8 +1844,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					}
 					projectId={replacementErrorProjectId}
 					workspaces={workspaces}
-				/>
-					<CommandPalette />
+				/> : null}
+					{!deep ? <CommandPalette /> : null}
 				</div>
 				</TerminalCacheProvider>
 			</SessionTopbarProvider>

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useDeepWorkStore } from "../stores/deep-work-store";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { CLOUD_CLASSIFY_WAIT_MS, NewTaskNavigator } from "./NewTaskNavigator";
@@ -63,6 +64,8 @@ function renderNavigator(client = new QueryClient()) {
 }
 
 beforeEach(() => {
+	useDeepWorkStore.setState({ enabled: false, side: "deep", task: undefined });
+	localStorage.removeItem("ao.deepWork.v1");
 	navigateMock.mockReset();
 	route.onNewChat = false;
 	dialog.props = undefined;
@@ -87,6 +90,21 @@ describe("NewTaskNavigator", () => {
 			{ to: "/new", search: { project: "proj-2", host: "box-a" }, replace: false },
 			{ to: "/new", search: { project: undefined, host: undefined }, replace: false },
 		]);
+	});
+
+	it("opens one human journal on Deep and refuses New task on Shallow", () => {
+		useDeepWorkStore.setState({ enabled: true, side: "deep" });
+		renderNavigator();
+		act(() => useUiStore.getState().requestNewTask("proj-1"));
+		const task = useDeepWorkStore.getState().task;
+		expect(task).toMatchObject({ stage: "brainstorming", projectId: "proj-1" });
+		act(() => useUiStore.getState().requestNewTask("coder-1"));
+		expect(useDeepWorkStore.getState().task).toBe(task);
+		act(() => useDeepWorkStore.setState({ side: "shallow", task: undefined }));
+		act(() => useUiStore.getState().requestNewTask("proj-1"));
+		expect(useDeepWorkStore.getState().task).toBeUndefined();
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(dialog.props?.open).toBe(false);
 	});
 
 	it("marks the page only for a report, so the next new chat is a normal one", () => {

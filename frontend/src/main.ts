@@ -4182,10 +4182,26 @@ function cancelDockBounce(): void {
 	app.dock?.cancelBounce(id);
 }
 
+let notificationPreviewsHidden = false;
+const openNotificationPreviews = new Set<ElectronNotification>();
+
+ipcMain.handle("notifications:setPreviewsHidden", (event, hidden: boolean) => {
+	if (event.sender !== getShellWebContents() || typeof hidden !== "boolean") return;
+	notificationPreviewsHidden = hidden;
+	if (!hidden) return;
+	for (const notification of openNotificationPreviews) notification.close();
+	openNotificationPreviews.clear();
+	cancelDockBounce();
+	if (isFlashing) {
+		isFlashing = false;
+		mainWindow?.flashFrame(false);
+	}
+});
+
 ipcMain.handle(
 	"notifications:show",
 	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) => {
-		if (!notification.id || !mainWindow) return;
+		if (notificationPreviewsHidden || !notification.id || !mainWindow) return;
 		// "Already looking" = the window has focus, or the renderer reports the
 		// prompt itself is on screen (`watched`). Visual signals are skipped then.
 		const looking = mainWindow.isFocused() || notification.watched === true;
@@ -4216,7 +4232,11 @@ ipcMain.handle(
 				// single main icon.
 				icon: process.platform === "darwin" ? undefined : windowIconPath(),
 			});
+			openNotificationPreviews.add(toast);
+			toast.once("close", () => openNotificationPreviews.delete(toast));
+			toast.once("failed", () => openNotificationPreviews.delete(toast));
 			toast.on("click", () => {
+				openNotificationPreviews.delete(toast);
 				if (!mainWindow) return;
 				if (mainWindow.isMinimized()) mainWindow.restore();
 				mainWindow.show();

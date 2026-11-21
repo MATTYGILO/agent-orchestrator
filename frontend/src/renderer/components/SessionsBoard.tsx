@@ -1,3 +1,4 @@
+import { useDeepWorkStore } from "../stores/deep-work-store";
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -110,7 +111,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const startsInPlace = localCloudBoard && cloudProject !== undefined &&
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
-	const boardLabel = t("shell.board");
+	const shallow = useDeepWorkStore((state) => state.enabled && state.side === "shallow");
+	const boardLabel = shallow && !projectId ? "Shallow" : t("shell.board");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions)).filter((session) => !session.needsResume || isArchivedSession(session));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
 	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
@@ -243,7 +245,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		hasWorkerSessions: liveSessions.length > 0,
 	});
 	const showStartup = !hostId && presentation.showStartup;
-	const showWelcome = !hostId && presentation.showWelcome;
+	const showWelcome = !shallow && !hostId && presentation.showWelcome;
 	const showProjectEmpty = hostId
 		? connected && remoteProjectQuery.isSuccess && Boolean(workspace) && liveSessions.length === 0
 		: presentation.showProjectEmpty;

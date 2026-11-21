@@ -1,3 +1,4 @@
+import { shallowAccessMessage, shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
 import { AppLink } from "./AppLink";
 import { CloudMark } from "./CloudMark";
 import { useQueryClient } from "@tanstack/react-query";
@@ -189,6 +190,7 @@ function NotificationWorkspaceState({
 }
 
 export function NotificationRuntime() {
+	const deep = useDeepWorkStore(shallowWorkHidden);
 	const queryClient = useQueryClient();
 	const { openPrimary } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();
@@ -234,8 +236,11 @@ export function NotificationRuntime() {
 	// Keep the OS launcher badge in sync in the persistent shell runtime;
 	// topbar controls can remount as the visible page changes.
 	useEffect(() => {
-		void aoBridge.notifications.setBadge(unreadCount);
-	}, [unreadCount]);
+		void aoBridge.notifications.setPreviewsHidden?.(deep);
+	}, [deep]);
+	useEffect(() => {
+		void aoBridge.notifications.setBadge(deep ? 0 : unreadCount);
+	}, [deep, unreadCount]);
 
 	useEffect(() => {
 		for (const host of remoteUnread.hosts) {
@@ -247,7 +252,7 @@ export function NotificationRuntime() {
 				continue; // Reconnecting to a host must not replay its existing inbox.
 			}
 			for (const notification of host.data.notifications) {
-				if (previousIds.has(notification.id)) continue;
+				if (previousIds.has(notification.id) || shallowWorkHidden(useDeepWorkStore.getState())) continue;
 				const id = `${REMOTE_NOTIFICATION_PREFIX}${notificationKey(host.hostId, notification.id)}`;
 				shownRemoteNotifications.current.set(id, notification);
 				if (shownRemoteNotifications.current.size > 256) {
@@ -287,7 +292,7 @@ export function NotificationRuntime() {
 			if (previous.has(notification.id)) continue;
 			previous.add(notification.id);
 			if (previous.size > 512) previous.delete(previous.values().next().value!);
-			if (notification.status !== "unread" || notification.resolvedAt) continue;
+			if (notification.status !== "unread" || notification.resolvedAt || shallowWorkHidden(useDeepWorkStore.getState())) continue;
 			const id = `${CLOUD_NOTIFICATION_PREFIX}${notification.id}`;
 			shownCloudNotifications.current.set(id, notification);
 			if (shownCloudNotifications.current.size > 256) {
@@ -309,6 +314,10 @@ export function NotificationRuntime() {
 
 	useEffect(() => {
 		return aoBridge.notifications.onClick((id) => {
+			if (shallowWorkHidden(useDeepWorkStore.getState())) {
+				useUiStore.getState().showGlobalToast(shallowAccessMessage());
+				return;
+			}
 			if (id.startsWith(CLOUD_NOTIFICATION_PREFIX)) {
 				const notificationId = id.slice(CLOUD_NOTIFICATION_PREFIX.length);
 				const notification = shownCloudNotifications.current.get(id) ??
@@ -342,7 +351,12 @@ export function NotificationRuntime() {
 	return null;
 }
 
-export function NotificationCenter({ style }: NotificationCenterProps) {
+export function NotificationCenter(props: NotificationCenterProps) {
+	const deep = useDeepWorkStore(shallowWorkHidden);
+	return deep ? null : <NotificationInbox {...props} />;
+}
+
+function NotificationInbox({ style }: NotificationCenterProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [actionError, setActionError] = useState<string | null>(null);

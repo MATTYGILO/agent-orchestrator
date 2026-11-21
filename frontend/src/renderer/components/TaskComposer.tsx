@@ -218,6 +218,7 @@ export type TaskLaunchOptions = {
 
 /** The agent, model and permission parts of a create request, saved so a retry can repeat them exactly. */
 export type LaunchReplay = {
+	branch?: string;
 	agent?: string;
 	model?: string;
 	effort?: string;
@@ -237,9 +238,11 @@ function base64Bytes(data: string): number {
 	return Math.floor((data.length * 3) / 4) - padding;
 }
 
-export function useTaskLaunch({ projectId, hostId }: {
+export function useTaskLaunch({ projectId, hostId, prepare = true, preferChat = false }: {
 	projectId?: string;
 	hostId?: string;
+	prepare?: boolean;
+	preferChat?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -539,7 +542,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// for the repo's canonical name, and the preparation's git work is the long
 	// part. Any other project still waits for the read.
 	const projectListed = useCachedProjectListed(projectId, hostId);
-	const prepareProjectId = isCloudProject || isStandalone
+	const prepareProjectId = !prepare || isCloudProject || isStandalone
 		? undefined
 		: projectListed ? projectId : projectQuery.data?.id;
 	useEffect(() => {
@@ -1024,11 +1027,12 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// A cloud project's Chat-capable harnesses come from the control plane, as a
 	// local project's come from the daemon.
 	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
+	const wantsChat = preferChat || settings?.defaultSessionMode === "chat";
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
-		settings?.defaultSessionMode === "chat" &&
+		wantsChat &&
 		!(chatHarnesses ?? []).includes(selectedAgent);
-	const usesChatPermissions = !isCloudProject && !requiresTuiFallback && settings?.defaultSessionMode === "chat";
+	const usesChatPermissions = !isCloudProject && !requiresTuiFallback && wantsChat;
 	const permissionDiscovery = useChatPermissionModesQuery(hostId, usesChatPermissions ? selectedAgent : undefined);
 	const chatPermissionModes = permissionDiscovery.data?.get(selectedAgent);
 	const projectPermissions = projectConfig?.worker?.agentConfig?.permissions ?? projectConfig?.agentConfig?.permissions;
@@ -1259,10 +1263,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 			// One that resolved while the checks above ran is claimed too.
 			submittedPreparation = heldPreparation || taskPreparationRef.current;
 			launchingPreparationRef.current = submittedPreparation;
+			const branch = replay?.branch ?? branchOverride;
 			const request: CreateTaskInput = {
 				projectId,
 				brief,
-				...(branchOverride && !isCloudProject && !isStandalone ? { branch: branchOverride } : {}),
+				...(branch && !isCloudProject && !isStandalone ? { branch } : {}),
 				...(replay ? {
 					agent: replay.agent as CreateTaskInput["agent"],
 					model: replay.model,
@@ -1383,7 +1388,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		}
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
-	const submitMode: TaskLaunchOptions["interfaceMode"] = isChatOnlyAgent(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	const submitMode: TaskLaunchOptions["interfaceMode"] = isChatOnlyAgent(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : preferChat ? "chat" : undefined;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
 			? launch(brief, { interfaceMode: isChatOnlyAgent(selectedAgent) ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
@@ -1499,6 +1504,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		launchFallback,
 		// What a plain send would request right now, to save alongside a send.
 		launchSnapshot: (): LaunchReplay => ({
+			...(preferChat && branchOverride ? { branch: branchOverride } : {}),
 			agent: selectedAgent || undefined,
 			model: requestedModel,
 			effort: requestedEffort,

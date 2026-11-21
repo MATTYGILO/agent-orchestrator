@@ -1,3 +1,5 @@
+import { shallowAccessMessage, shallowWorkHidden, useDeepWorkStore } from "../stores/deep-work-store";
+import { useUiStore } from "../stores/ui-store";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { LOCAL_HOST, type HostId } from "./hosts";
@@ -36,6 +38,10 @@ export function useNavigateToSession(): (projectId: string | undefined, sessionI
 	return useCallback(
 		(projectId: string | undefined, sessionId: string, host: HostId = LOCAL_HOST) => {
 			if (!sessionId) return;
+			if (shallowWorkHidden(useDeepWorkStore.getState())) {
+				useUiStore.getState().showGlobalToast(shallowAccessMessage());
+				return;
+			}
 			void navigate(sessionNavigateTarget(projectId, sessionId, host));
 		},
 		[navigate],
