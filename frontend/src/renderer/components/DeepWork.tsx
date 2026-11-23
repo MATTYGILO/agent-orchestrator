@@ -3,13 +3,13 @@ import { ArrowLeft, ArrowRight, Lock, Plus, X } from "@/components/app-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import { useWorkspaceSession, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { shallowUnlock, useDeepWorkStore, type DeepWorkTask } from "../stores/deep-work-store";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, CLOUD_STANDALONE_WORKSPACE_ID, isScratchpadWorkspace, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { apiErrorException } from "../lib/api-error-exception";
-import { useConversation, useConversationCommands } from "../hooks/useConversation";
 import { planningContext, planningJournal } from "../lib/planning-journal";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { sendIsUncertain } from "../lib/task-launch-outcome";
@@ -18,6 +18,17 @@ import { useTaskLaunch } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Input } from "./ui/input";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+	settingsDialogBodyClass,
+	settingsDialogContentClass,
+	settingsDialogFooterClass,
+	settingsDialogHeaderClass,
+} from "./ui/dialog";
 
 const fieldClass = "mt-1 block w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground";
 
@@ -91,9 +102,7 @@ export function DeepWorkPage({ workspaces }: { workspaces: WorkspaceSummary[] })
 				</BoardColumnFrame>
 			</div>
 			{storageError ? <p role="alert" className="px-4 py-2 text-sm text-destructive">{storageError}</p> : null}
-			{task?.stage === "handoff" && task.planningSessionId ? (
-				<WorkerHandoffReview key={task.id} task={task} />
-			) : task?.stage === "chat" && task.planningSessionId ? (
+			{task?.stage === "chat" && task.planningSessionId ? (
 				<PlanningChat key={task.id} task={task} sessionId={task.planningSessionId} />
 			) : task ? <DeepWorkJournal key={task.id} task={task} workspaces={workspaces} /> : null}
 		</div>
@@ -101,12 +110,8 @@ export function DeepWorkPage({ workspaces }: { workspaces: WorkspaceSummary[] })
 }
 
 function DeepWorkJournal({ task, workspaces }: { task: DeepWorkTask; workspaces: WorkspaceSummary[] }) {
-	const [discardOpen, setDiscardOpen] = useState(false);
 	const [starting, setStarting] = useState(false);
 	const [launchRequested, setLaunchRequested] = useState(false);
-	const [discarding, setDiscarding] = useState(false);
-	const [discardError, setDiscardError] = useState<string>();
-	const queryClient = useQueryClient();
 	const update = useDeepWorkStore((state) => state.updateTask);
 	const targets = [
 		{ id: STANDALONE_WORKSPACE_ID, name: "Scratchpad", hostId: undefined },
@@ -115,21 +120,7 @@ function DeepWorkJournal({ task, workspaces }: { task: DeepWorkTask; workspaces:
 	const keyFor = (target: { id: string; hostId?: string }) => JSON.stringify([target.hostId, target.id]);
 	const targetKey = keyFor({ id: task.projectId, hostId: task.hostId });
 	const supportedTarget = targets.some((target) => keyFor(target) === targetKey);
-	const fieldsLocked = Boolean(task.pending) || launchRequested || starting || discarding;
-	const discard = async () => {
-		if (discarding || starting) return;
-		setDiscarding(true);
-		setDiscardError(undefined);
-		try {
-			await cleanUpPlanner(task);
-			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(task.hostId) });
-			useDeepWorkStore.getState().clearTask(task.id);
-		} catch (cause) {
-			setDiscardError(cause instanceof Error ? cause.message : "The planning session could not be removed.");
-		} finally {
-			setDiscarding(false);
-		}
-	};
+	const fieldsLocked = Boolean(task.pending) || launchRequested || starting;
 
 	return (
 		<div className="min-h-0 flex-1 overflow-y-auto">
@@ -157,7 +148,7 @@ function DeepWorkJournal({ task, workspaces }: { task: DeepWorkTask; workspaces:
 						onClick={() => update(task.id, { questions: [...task.questions, ""] })}>Add question</Button>
 				</fieldset>
 				<label className="text-sm font-medium">Project
-					<select className={fieldClass} value={targetKey} disabled={fieldsLocked || Boolean(task.planningSessionId)} onChange={(event) => {
+					<select className={fieldClass} value={targetKey} disabled={fieldsLocked} onChange={(event) => {
 						const target = targets.find((entry) => keyFor(entry) === event.target.value);
 						if (target) update(task.id, { projectId: target.id, hostId: target.hostId });
 					}}>
@@ -165,32 +156,17 @@ function DeepWorkJournal({ task, workspaces }: { task: DeepWorkTask; workspaces:
 						{targets.map((target) => <option key={keyFor(target)} value={keyFor(target)}>{target.name}{target.hostId ? ` · ${labelForHost(target.hostId) ?? target.hostId}` : ""}</option>)}
 					</select>
 				</label>
-				{!supportedTarget && !task.planningSessionId ? <p className="text-sm text-muted-foreground">Choose a local or paired project to open Planning Chat.</p> : null}
+				{!supportedTarget ? <p className="text-sm text-muted-foreground">Choose a local or paired project to open Planning Chat.</p> : null}
 				<div className="flex flex-wrap items-start justify-between gap-3">
-					<Button type="button" size="sm" variant="quiet" disabled={starting || launchRequested || task.pending?.kind === "start"} onClick={() => setDiscardOpen(true)}>Discard task</Button>
-					{task.planningSessionId ? (
-						<PlanningContinue task={task} sessionId={task.planningSessionId} onStarting={setStarting} disabled={discarding} />
-					) : launchRequested ? (
+					<DiscardTaskButton task={task} disabled={starting || launchRequested || Boolean(task.pending)} />
+					{launchRequested ? (
 						<PlanningLaunch task={task} onStarting={setStarting} onBack={() => setLaunchRequested(false)} />
 					) : (
-						<Button size="sm" variant="primary" disabled={!supportedTarget || discarding} onClick={() => setLaunchRequested(true)}>
+						<Button size="sm" variant="primary" disabled={!supportedTarget} onClick={() => setLaunchRequested(true)}>
 							{task.pending ? "Retry Continue" : "Continue"}
 						</Button>
 					)}
 				</div>
-				<ConfirmDialog
-					open={discardOpen}
-					onOpenChange={setDiscardOpen}
-					title="Discard this task?"
-					description={task.planningSessionId
-						? "The journal and conversation will be deleted after the planning workspace is safely released."
-						: "The journal and queued questions will be deleted."}
-					confirmLabel="Discard task"
-					destructive
-					busy={discarding}
-					error={discardError}
-					onConfirm={() => void discard()}
-				/>
 			</div>
 		</div>
 	);
@@ -221,7 +197,7 @@ function PlanningLaunch({ task, onStarting, onBack }: { task: DeepWorkTask; onSt
 		try {
 			if (!store.updateTask(task.id, { pending: request })) return;
 			const sessionId = await launch.launch(request.text, { clientRequestId: request.requestId, replay: request.replay, attachments: [] });
-			store.updateTask(task.id, { planningSessionId: sessionId, delivered: request.journal, pending: undefined, stage: "chat" });
+			store.updateTask(task.id, { planningSessionId: sessionId, pending: undefined, stage: "chat" });
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(task.hostId) });
 		} catch (cause) {
 			if (!pending && !sendIsUncertain(cause)) store.updateTask(task.id, { pending: undefined });
@@ -241,221 +217,165 @@ function PlanningLaunch({ task, onStarting, onBack }: { task: DeepWorkTask; onSt
 			{!pending && !launch.isSubmitting ? launch.renderAgentControl({ ...launch.agent, id: "deep-work-agent" }) : null}
 			{!pending && !launch.chatCompatible ? <p className="text-sm text-muted-foreground">Planning requires a Chat-capable agent.</p> : null}
 			<div className="flex gap-2">
-				<Button size="sm" variant="quiet" disabled={launch.isSubmitting} onClick={onBack}>Back to journal</Button>
+				<Button size="sm" variant="quiet" disabled={launch.isSubmitting || Boolean(pending)} onClick={onBack}>Back to journal</Button>
 				<Button size="sm" variant="primary" disabled={!launch.canSubmit || launch.isSubmitting} onClick={() => void start()}>Open Planning Chat</Button>
 			</div>
 		</div>
 	);
 }
 
-function PlanningContinue({ task, sessionId, disabled, onStarting }: {
-	task: DeepWorkTask;
-	sessionId: string;
-	disabled: boolean;
-	onStarting: (running: boolean) => void;
-}) {
-	const { send } = useConversationCommands(sessionId, task.hostId);
-	const inFlight = useRef(false);
-	const [sending, setSending] = useState(false);
-	const [error, setError] = useState<string>();
-	const resume = async () => {
-		if (inFlight.current) return;
-		const store = useDeepWorkStore.getState();
-		const journal = planningJournal(task);
-		const text = planningContext(journal, task.delivered);
-		const pending = task.pending?.kind === "update" ? task.pending : undefined;
-		if (!pending && !text) {
-			store.updateTask(task.id, { stage: "chat" });
-			return;
-		}
-		const request = pending ?? { kind: "update" as const, requestId: crypto.randomUUID(), text, journal };
-		inFlight.current = true;
-		setSending(true);
-		onStarting(true);
-		setError(undefined);
-		try {
-			if (!store.updateTask(task.id, { pending: request })) return;
-			await send({ text: request.text, clientMessageId: request.requestId });
-			store.updateTask(task.id, { delivered: request.journal, pending: undefined, stage: "chat" });
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "The planning journal could not be sent.");
-		} finally {
-			inFlight.current = false;
-			setSending(false);
-			onStarting(false);
-		}
-	};
-	return (
-		<div className="flex flex-col items-end gap-2">
-			{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-			<Button size="sm" variant="primary" disabled={disabled || sending} onClick={() => void resume()}>
-				{sending ? "Sending journal…" : task.pending ? "Retry Continue" : "Continue"}
-			</Button>
-		</div>
-	);
-}
-
-const HANDOFF_REQUEST = "Prepare a self-contained handoff prompt for a fresh implementation worker based on this planning conversation. Include the agreed scope, relevant project context, constraints, decisions and verification steps. Make uncertainty explicit. Reply with the handoff text only. Do not implement, change files, make commits or launch a worker.";
-
-function PlanningChat({ task, sessionId }: { task: DeepWorkTask; sessionId: string }) {
-	const { data: session, isLoading } = useWorkspaceSession(sessionId, task.hostId);
-	const { snapshot } = useConversation(sessionId, task.hostId);
-	const { send, sendPending } = useConversationCommands(sessionId, task.hostId);
-	const update = useDeepWorkStore((state) => state.updateTask);
-	const [busy, setBusy] = useState(true);
-	const [generationError, setGenerationError] = useState<string>();
-	const generating = useRef(false);
-	const generation = task.generation;
-	const workChanged = useCallback(({ controllerBusy, hasRunningTurn, queuedTurnCount }: {
-		controllerBusy: boolean;
-		hasRunningTurn: boolean;
-		queuedTurnCount: number;
-	}) => setBusy(controllerBusy || hasRunningTurn || queuedTurnCount > 0), []);
-
-	useEffect(() => {
-		if (!generation || !snapshot || snapshot.sessionId !== sessionId) return;
-		const message = snapshot.items.find((item) => item.kind === "message" && item.role === "user" && item.clientMessageId === generation.requestId);
-		const turnId = generation.turnId ?? message?.turnId;
-		const turn = snapshot.turns.find((candidate) => candidate.id === turnId);
-		if (!turn || turn.state === "queued" || turn.state === "running") return;
-		const output = snapshot.items.flatMap((item) => item.kind === "message" && item.turnId === turnId &&
-			item.role === "assistant" && !item.streaming && item.text.trim() ? [item.text] : []).join("\n\n");
-		if ((turn.state === "completed" || turn.state === "recovered") && output) {
-			update(task.id, { generation: undefined, handoff: output, stage: "handoff" });
-		} else if (update(task.id, { generation: undefined })) {
-			setGenerationError("The planning agent did not return a handoff. Prepare for worker to try again.");
-		}
-	}, [generation, sessionId, snapshot, task.id, update]);
-
-	const prepare = async () => {
-		if (generating.current || generation?.turnId) return;
-		const latest = useDeepWorkStore.getState();
-		if (latest.task?.handoff !== undefined) {
-			update(task.id, { stage: "handoff" });
-			return;
-		}
-		const request = generation ?? { requestId: crypto.randomUUID() };
-		generating.current = true;
-		setGenerationError(undefined);
-		try {
-			if (!update(task.id, { generation: request })) return;
-			const reply = await send({ text: HANDOFF_REQUEST, clientMessageId: request.requestId });
-			// A reply may have arrived after the transcript observer already opened
-			// the review. Keep the finished result and never re-arm its request.
-			if (reply?.turnId && useDeepWorkStore.getState().task?.generation?.requestId === request.requestId) {
-				update(task.id, { generation: { ...request, turnId: reply.turnId } });
-			}
-		} catch (cause) {
-			setGenerationError(cause instanceof Error ? cause.message : "The handoff request could not be delivered. Retry with the same request.");
-		} finally {
-			generating.current = false;
-		}
-	};
-
-	return (
-		<div className="flex min-h-0 flex-1 flex-col pb-14">
-			<div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2">
-				<h2 className="text-sm font-medium">Planning Chat</h2>
-				<div className="flex gap-2">
-					<Button size="sm" variant="quiet" disabled={Boolean(session && busy) || sendPending || Boolean(generation?.turnId)}
-						onClick={() => update(task.id, { stage: "journal", generation: undefined })}>Back to journal</Button>
-					<Button size="sm" variant="primary" disabled={!session || busy || sendPending || Boolean(generation?.turnId)} onClick={() => void prepare()}>
-						{generation?.turnId || sendPending ? "Preparing handoff…" : generation ? "Retry handoff request" : "Prepare for worker"}
-					</Button>
-				</div>
-			</div>
-			{generationError ? <p role="alert" className="px-4 py-2 text-sm text-destructive">{generationError}</p> : null}
-			{session ? <SessionChatSurface session={session} hostId={task.hostId} daemonReady planning newWorkDisabled={Boolean(generation)} onConversationWorkChange={workChanged} />
-				: <p role="status" className="p-4 text-sm text-muted-foreground">{isLoading ? "Loading Planning Chat…" : "The planning session is unavailable."}</p>}
-		</div>
-	);
-}
-
-async function cleanUpPlanner(task: DeepWorkTask) {
+/**
+ * Stops the planning session so it stops spending. It is never deleted, archived
+ * or cleaned up, and its worktree is left alone.
+ */
+async function stopPlanner(task: DeepWorkTask) {
 	if (!task.planningSessionId) return;
 	const client = clientForSessionHost(task.hostId);
 	const path = { sessionId: task.planningSessionId };
 	const current = await client.GET("/api/v1/sessions/{sessionId}", { params: { path } });
 	if (current.response.status === 404) return;
 	if (current.error) throw apiErrorException(current.error);
-	if (!current.data?.session?.isTerminated) {
-		const stopped = await client.POST("/api/v1/sessions/{sessionId}/kill", { params: { path } });
-		if (stopped.response.status === 404) return;
-		if (stopped.error) throw apiErrorException(stopped.error);
-	}
-	const deleted = await client.DELETE("/api/v1/sessions/{sessionId}", { params: { path, query: { cleanup: true } } });
-	if (deleted.error && deleted.response.status !== 404) throw apiErrorException(deleted.error);
+	if (current.data?.session?.isTerminated) return;
+	const stopped = await client.POST("/api/v1/sessions/{sessionId}/kill", { params: { path } });
+	if (stopped.response.status === 404) return;
+	if (stopped.error) throw apiErrorException(stopped.error);
 }
 
-function WorkerHandoffReview({ task }: { task: DeepWorkTask }) {
+/**
+ * Discards the task. The planner is stopped, not deleted, and a failure to stop it
+ * never keeps the task around.
+ */
+function DiscardTaskButton({ task, disabled }: { task: DeepWorkTask; disabled?: boolean }) {
+	const [open, setOpen] = useState(false);
+	const [discarding, setDiscarding] = useState(false);
+	const queryClient = useQueryClient();
+	const discard = async () => {
+		if (discarding) return;
+		setDiscarding(true);
+		await stopPlanner(task).catch(() => undefined);
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(task.hostId) });
+		useDeepWorkStore.getState().clearTask(task.id);
+	};
+
+	return (
+		<>
+			<Button type="button" size="sm" variant="quiet" disabled={disabled || discarding} onClick={() => setOpen(true)}>Discard task</Button>
+			<ConfirmDialog
+				open={open}
+				onOpenChange={setOpen}
+				title="Discard this task?"
+				description={task.planningSessionId
+					? "The journal and handoff draft are deleted and Planning Chat is stopped. The planning session is kept."
+					: "The journal and queued questions will be deleted."}
+				confirmLabel="Discard task"
+				destructive
+				busy={discarding}
+				onConfirm={() => void discard()}
+			/>
+		</>
+	);
+}
+
+function PlanningChat({ task, sessionId }: { task: DeepWorkTask; sessionId: string }) {
+	const { data: session, isLoading } = useWorkspaceSession(sessionId, task.hostId);
+	const [busy, setBusy] = useState(true);
+	const [handoffOpen, setHandoffOpen] = useState(false);
+	const workChanged = useCallback(({ controllerBusy, hasRunningTurn, queuedTurnCount }: {
+		controllerBusy: boolean;
+		hasRunningTurn: boolean;
+		queuedTurnCount: number;
+	}) => setBusy(controllerBusy || hasRunningTurn || queuedTurnCount > 0), []);
+
+	return (
+		<div className="flex min-h-0 flex-1 flex-col pb-14">
+			<div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2">
+				<h2 className="text-sm font-medium">Planning Chat</h2>
+				<div className="flex gap-2">
+					<DiscardTaskButton task={task} />
+					<Button size="sm" variant="primary" disabled={!session || busy} onClick={() => setHandoffOpen(true)}>Hand off to worker</Button>
+				</div>
+			</div>
+			{session ? <SessionChatSurface session={session} hostId={task.hostId} daemonReady planning onConversationWorkChange={workChanged} />
+				: <p role="status" className="p-4 text-sm text-muted-foreground">{isLoading ? "Loading Planning Chat…" : "The planning session is unavailable."}</p>}
+			<WorkerHandoffDialog task={task} open={handoffOpen} onOpenChange={setHandoffOpen} />
+		</div>
+	);
+}
+
+function WorkerHandoffDialog({ task, open, onOpenChange }: { task: DeepWorkTask; open: boolean; onOpenChange: (open: boolean) => void }) {
 	const launch = useTaskLaunch({ projectId: task.projectId, hostId: task.hostId, preferChat: true, prepare: false });
 	const queryClient = useQueryClient();
 	const update = useDeepWorkStore((state) => state.updateTask);
 	const inFlight = useRef(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string>();
-	const { buildRequest, workerSessionId } = task;
+	const { buildRequest } = task;
 	const text = task.handoff ?? "";
+	const locked = Boolean(buildRequest);
 
-	const confirm = async (useTerminal = false) => {
-		if (inFlight.current || (!workerSessionId && (!text.trim() || !launch.canSubmit))) return;
+	const start = async (useTerminal = false) => {
+		if (inFlight.current || !text.trim() || !launch.canSubmit) return;
 		inFlight.current = true;
 		setBusy(true);
 		setError(undefined);
-		const store = useDeepWorkStore.getState();
-		let workerId = workerSessionId;
 		try {
-			if (!workerId) {
-				const replay = launch.launchSnapshot();
-				const request = buildRequest ?? { requestId: crypto.randomUUID(), text, replay: { ...replay, ...(useTerminal ? { mode: "tui" as const } : {}) } };
-				if (!update(task.id, { buildRequest: request })) return;
-				workerId = await launch.launch(request.text, { clientRequestId: request.requestId, replay: request.replay, attachments: [] });
-				// Persist the accepted worker before touching the planner. A relaunch
-				// can retry cleanup without replaying the launch.
-				if (!update(task.id, { workerSessionId: workerId })) return;
-			}
-			await cleanUpPlanner(task);
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(task.hostId) });
-			store.clearTask(task.id);
+			// A lost launch response is retried with the same request, so the worker is not started twice.
+			const request = buildRequest ?? { requestId: crypto.randomUUID(), text, replay: { ...launch.launchSnapshot(), ...(useTerminal ? { mode: "tui" as const } : {}) } };
+			if (!buildRequest && !update(task.id, { buildRequest: request })) return;
+			await launch.launch(request.text, { clientRequestId: request.requestId, replay: request.replay, attachments: [] });
+			// The worker owns the work now. Stopping the planner is best effort, so it never holds the task.
+			await stopPlanner(task).catch(() => undefined);
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(task.hostId) });
+			useDeepWorkStore.getState().clearTask(task.id);
 		} catch (cause) {
-			if (!workerId && !buildRequest && !sendIsUncertain(cause)) update(task.id, { buildRequest: undefined });
-			const reason = cause instanceof Error ? cause.message : "Try again.";
-			setError(workerId ? `The worker started. Planning cleanup still needs attention. ${reason}` : reason);
+			if (!buildRequest && !sendIsUncertain(cause)) update(task.id, { buildRequest: undefined });
+			setError(cause instanceof Error ? cause.message : "Try again.");
 		} finally {
 			inFlight.current = false;
 			setBusy(false);
 		}
 	};
 
-	const locked = Boolean(buildRequest || workerSessionId);
 	const recovery = !locked && (launch.error ? launch.errorAction : launch.remoteLoadErrorAction);
 	const recoveryInput = !locked && launch.error ? launch.errorAction?.input : undefined;
+	const canStart = !busy && Boolean(text.trim()) && launch.canSubmit;
 	return (
-		<div className="min-h-0 flex-1 overflow-y-auto">
-			<div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-20 pt-5">
-				<h2 className="text-base font-semibold">Review worker handoff</h2>
-				{workerSessionId ? <p role="status" className="text-sm text-muted-foreground">The worker has started. Finish cleaning up Planning to release this task.</p> : null}
-				<label className="text-sm font-medium">Handoff prompt
-					<textarea className={fieldClass} rows={12} value={text} readOnly={locked || busy}
-						onChange={(event) => update(task.id, { handoff: event.target.value })} />
-				</label>
-				{!locked ? <div className="flex flex-wrap items-center gap-2">
-					{launch.renderAgentControl({ ...launch.agent, id: "deep-work-worker-agent" })}
-					{launch.renderModelControl({ ...launch.model, id: "deep-work-worker-model" })}
-					{launch.showEffort ? launch.renderEffortControl({ ...launch.effort, id: "deep-work-worker-effort", label: "Reasoning effort" }) : null}
-				</div> : null}
-				{error || (!locked && launch.remoteLoadError) ? <p role="alert" className="text-sm text-destructive">{error ?? launch.remoteLoadError}</p> : null}
-				{recoveryInput ? <Input aria-label={recoveryInput.label} value={recoveryInput.value}
-					onChange={(event) => recoveryInput.onChange(event.target.value)} /> : null}
-				<div className="flex flex-wrap justify-end gap-2">
-					<Button size="sm" variant="quiet" disabled={busy || locked} onClick={() => update(task.id, { stage: "chat" })}>Back to Planning Chat</Button>
+		<Dialog open={open} onOpenChange={(next) => { if (busy && !next) return; onOpenChange(next); }}>
+			<DialogContent
+				aria-busy={busy || undefined}
+				className={cn(settingsDialogContentClass, "w-[min(520px,calc(100vw-24px))]")}
+			>
+				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
+					<DialogTitle className="settings-dialog-title text-base">Hand off to worker</DialogTitle>
+					<DialogDescription asChild>
+						<div className="text-control leading-5 text-settings-muted">A fresh worker starts with exactly this prompt. Planning Chat stops once the worker starts.</div>
+					</DialogDescription>
+				</div>
+				<div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>
+					<label className="text-sm font-medium">Handoff
+						<textarea className={fieldClass} rows={12} value={text} readOnly={locked || busy}
+							onChange={(event) => update(task.id, { handoff: event.target.value })} />
+					</label>
+					{!locked ? <div className="flex flex-wrap items-center gap-2">
+						{launch.renderAgentControl({ ...launch.agent, id: "deep-work-worker-agent" })}
+						{launch.renderModelControl({ ...launch.model, id: "deep-work-worker-model" })}
+						{launch.showEffort ? launch.renderEffortControl({ ...launch.effort, id: "deep-work-worker-effort", label: "Reasoning effort" }) : null}
+					</div> : null}
+					{error || (!locked && launch.remoteLoadError) ? <p role="alert" className="text-sm text-destructive">{error ?? launch.remoteLoadError}</p> : null}
+					{recoveryInput ? <Input aria-label={recoveryInput.label} value={recoveryInput.value}
+						onChange={(event) => recoveryInput.onChange(event.target.value)} /> : null}
+				</div>
+				<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
+					<DialogClose asChild>
+						<Button type="button" size="sm" variant="secondary" disabled={busy}>Cancel</Button>
+					</DialogClose>
 					{recovery ? <Button size="sm" variant="secondary" onClick={recovery.onClick}>{recovery.label}</Button> : null}
-					{!locked && launch.fallbackAction === "tui" ? <Button size="sm" variant="secondary" onClick={() => void confirm(true)}>Confirm and start in Terminal</Button> : null}
-					<Button size="sm" variant="primary" disabled={busy || (!workerSessionId && (!text.trim() || !launch.canSubmit))} onClick={() => void confirm()}>
-						{busy ? "Working…" : workerSessionId ? "Retry cleanup" : buildRequest ? "Retry Confirm" : "Confirm and start worker"}
+					{!locked && launch.fallbackAction === "tui" ? <Button size="sm" variant="secondary" disabled={!canStart} onClick={() => void start(true)}>Start in Terminal</Button> : null}
+					<Button size="sm" variant="primary" disabled={!canStart} onClick={() => void start()}>
+						{busy ? "Starting worker…" : "Start worker"}
 					</Button>
 				</div>
-			</div>
-		</div>
+			</DialogContent>
+		</Dialog>
 	);
 }

@@ -15,16 +15,13 @@ export type DeepWorkTask = PlanningJournal & {
 	id: string;
 	projectId: string;
 	hostId?: string;
-	stage: "journal" | "chat" | "handoff";
+	stage: "journal" | "chat";
 	planningSessionId?: string;
-	generation?: { requestId: string; turnId?: string };
+	/** The worker prompt drafted in the Hand off dialog. Empty until the user types. */
 	handoff?: string;
+	/** Launch request for the worker, kept so a lost response can be retried idempotently. */
 	buildRequest?: { requestId: string; replay: LaunchReplay; text: string };
-	workerSessionId?: string;
-	delivered?: PlanningJournal;
-	pending?:
-		| { kind: "start"; requestId: string; replay: LaunchReplay; text: string; journal: PlanningJournal }
-		| { kind: "update"; requestId: string; text: string; journal: PlanningJournal };
+	pending?: { kind: "start"; requestId: string; replay: LaunchReplay; text: string; journal: PlanningJournal };
 };
 
 type DeepWorkState = {
@@ -70,18 +67,53 @@ export function shallowUnlock(state: Pick<DeepWorkState, "times" | "eligibleAfte
 	return { due, next };
 }
 
+type PersistedTask = Partial<Omit<DeepWorkTask, "stage">> & {
+	stage?: string;
+	// Fields from earlier prototypes that no longer exist. They are dropped on load.
+	generation?: unknown;
+	delivered?: unknown;
+	workerSessionId?: unknown;
+};
+
+/**
+ * Loads a task saved by any earlier shape. Planning Chat is one-way, so any task
+ * with a planner session resumes there. A "handoff" stage and a worker session
+ * are now just a draft in the Chat, and an accepted worker is retried by its
+ * saved request.
+ */
+function restoreTask(saved: PersistedTask | undefined): DeepWorkTask | undefined {
+	if (!saved) return undefined;
+	// A worker was already accepted for this task, so the task was handed off.
+	// Only the old planner cleanup was holding it, and that cleanup is gone.
+	if (saved.workerSessionId) return undefined;
+	if (saved.stage !== "journal" && saved.stage !== "chat" && saved.stage !== "handoff") {
+		// The first local prototype held a separate manual handoff. Restore its
+		// journal, without replaying a request for that superseded workflow.
+		return {
+			id: saved.id ?? "", projectId: saved.projectId ?? "", hostId: saved.hostId,
+			stage: "journal", title: saved.title ?? "", notes: saved.notes ?? "", questions: saved.questions ?? [],
+		};
+	}
+	return {
+		id: saved.id ?? "",
+		projectId: saved.projectId ?? "",
+		hostId: saved.hostId,
+		title: saved.title ?? "",
+		notes: saved.notes ?? "",
+		questions: saved.questions ?? [],
+		stage: saved.planningSessionId ? "chat" : "journal",
+		planningSessionId: saved.planningSessionId,
+		handoff: saved.handoff,
+		buildRequest: saved.buildRequest,
+		pending: saved.pending?.kind === "start" ? saved.pending : undefined,
+	};
+}
+
 function readState(): DeepWorkState {
 	try {
-		const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as DeepWorkState | null;
+		const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as (Omit<DeepWorkState, "task"> & { task?: PersistedTask }) | null;
 		if (saved && Array.isArray(saved.times) && saved.times.every((time) => WALL_TIME.test(time))) {
-			const task = saved.task;
-			// The first local prototype held a separate manual handoff. Restore its
-			// journal, without replaying a request for that superseded workflow.
-			const restoredTask = task && (task.stage === "journal" || task.stage === "chat" || task.stage === "handoff") ? task : task && {
-				id: task.id, projectId: task.projectId, hostId: task.hostId,
-				stage: "journal" as const, title: task.title, notes: task.notes, questions: task.questions,
-			};
-			return { ...defaults, ...saved, task: restoredTask };
+			return { ...defaults, ...saved, task: restoreTask(saved.task) };
 		}
 	} catch {
 		// A profile without saved state starts in normal mode.

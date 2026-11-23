@@ -40,7 +40,7 @@ describe("Deep Work schedule and focus", () => {
 		expect(shallowUnlock(current(), local(21, 12, 1)).due).toBe(false);
 	});
 
-	it("restores the same exclusive task, schedule and pending handoff after a restart", async () => {
+	it("restores the same exclusive task, schedule and handoff draft after a restart", async () => {
 		const { useDeepWorkStore } = await import("./deep-work-store");
 		const current = useDeepWorkStore.getState;
 		current().setEnabled(true, +local(21, 10));
@@ -48,7 +48,7 @@ describe("Deep Work schedule and focus", () => {
 		expect(current().beginTask("project", "remote")).toBe(true);
 		const id = current().task!.id;
 		current().updateTask(id, {
-			stage: "handoff", planningSessionId: "planner", title: "Journal", notes: "Ideas", questions: ["Which one?"], handoff: "Build plan A",
+			stage: "chat", planningSessionId: "planner", title: "Journal", notes: "Ideas", questions: ["Which one?"], handoff: "Build plan A",
 			buildRequest: { requestId: "retry", text: "Build plan A", replay: { agent: "codex", mode: "chat" } },
 		});
 		vi.resetModules();
@@ -81,5 +81,44 @@ describe("Deep Work schedule and focus", () => {
 		}
 		expect(deepWorkRouteBlocked("/", deep)).toBe(false);
 		expect(deepWorkRouteBlocked("/settings", deep)).toBe(false);
+	});
+	it("loads tasks saved before Planning Chat became one-way", async () => {
+		const journal = { title: "T", notes: "N", questions: [] };
+		localStorage.setItem("ao.deepWork.v1", JSON.stringify({
+			enabled: true, side: "deep", times: ["11:00"], eligibleAfter: 0, unlockOwed: false,
+			task: { id: "t", projectId: "p", stage: "handoff", planningSessionId: "planner", ...journal, handoff: "Old draft", generation: { requestId: "g" }, delivered: journal, pending: { kind: "update", requestId: "u", text: "x", journal } },
+		}));
+		const { useDeepWorkStore } = await import("./deep-work-store");
+		const task = useDeepWorkStore.getState().task!;
+		expect(task).toEqual({ id: "t", projectId: "p", stage: "chat", planningSessionId: "planner", ...journal, handoff: "Old draft" });
+		expect(task).not.toHaveProperty("generation");
+		expect(task).not.toHaveProperty("delivered");
+	});
+
+	it("releases a task whose worker had already started but was held by planner cleanup", async () => {
+		localStorage.setItem("ao.deepWork.v1", JSON.stringify({
+			enabled: true, side: "deep", times: ["11:00"], eligibleAfter: 0, unlockOwed: false,
+			task: { id: "t", projectId: "p", stage: "handoff", planningSessionId: "planner", title: "", notes: "", questions: [], workerSessionId: "w" },
+		}));
+		const { useDeepWorkStore } = await import("./deep-work-store");
+		expect(useDeepWorkStore.getState().task).toBeUndefined();
+	});
+
+	it("keeps a planner session in Planning Chat even when it was saved as the journal", async () => {
+		localStorage.setItem("ao.deepWork.v1", JSON.stringify({
+			enabled: true, side: "deep", times: ["11:00"], eligibleAfter: 0, unlockOwed: false,
+			task: { id: "t", projectId: "p", stage: "journal", planningSessionId: "planner", title: "", notes: "", questions: [] },
+		}));
+		const { useDeepWorkStore } = await import("./deep-work-store");
+		expect(useDeepWorkStore.getState().task?.stage).toBe("chat");
+	});
+
+	it("keeps a journal without a planner as the journal", async () => {
+		localStorage.setItem("ao.deepWork.v1", JSON.stringify({
+			enabled: true, side: "deep", times: ["11:00"], eligibleAfter: 0, unlockOwed: false,
+			task: { id: "t", projectId: "p", stage: "handoff", title: "Idea", notes: "", questions: [] },
+		}));
+		const { useDeepWorkStore } = await import("./deep-work-store");
+		expect(useDeepWorkStore.getState().task).toMatchObject({ stage: "journal", title: "Idea" });
 	});
 });

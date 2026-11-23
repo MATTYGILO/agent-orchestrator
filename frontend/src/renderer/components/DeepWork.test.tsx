@@ -1,24 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useDeepWorkStore } from "../stores/deep-work-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { DeepWorkPage, DeepWorkSwitcher } from "./DeepWork";
 
-const { useLaunch, launch, send, navigate, read, kill, remove, chat } = vi.hoisted(() => ({
-	useLaunch: vi.fn(), launch: vi.fn(), send: vi.fn(), navigate: vi.fn(),
+const { useLaunch, launch, navigate, read, kill, remove } = vi.hoisted(() => ({
+	useLaunch: vi.fn(), launch: vi.fn(), navigate: vi.fn(),
 	read: vi.fn(), kill: vi.fn(), remove: vi.fn(),
-	chat: { snapshot: undefined as unknown },
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => navigate }));
 vi.mock("./TaskComposer", () => ({ useTaskLaunch: useLaunch }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKeyForHost: () => ["workspaces"],
 	useWorkspaceSession: (id: string) => ({ data: { id } }),
-}));
-vi.mock("../hooks/useConversation", () => ({
-	useConversation: () => chat,
-	useConversationCommands: () => ({ send, sendPending: false }),
 }));
 vi.mock("../lib/host-clients", () => ({
 	labelForHost: () => undefined,
@@ -51,12 +46,10 @@ beforeEach(() => {
 		renderModelControl: () => null,
 	});
 	launch.mockReset();
-	send.mockReset();
 	navigate.mockReset();
 	read.mockReset().mockResolvedValue({ data: { session: { isTerminated: false } }, response: { status: 200 } });
 	kill.mockReset().mockResolvedValue({ response: { status: 200 } });
 	remove.mockReset().mockResolvedValue({ response: { status: 200 } });
-	chat.snapshot = undefined;
 });
 
 afterEach(cleanup);
@@ -70,7 +63,16 @@ function renderPlanning() {
 
 const button = (name: string) => screen.getByRole("button", { name });
 
-it("starts the scoped Chat only on Continue and resends only new journal context", async () => {
+/** A task whose Planning Chat is already open. */
+function openChatTask() {
+	const store = useDeepWorkStore.getState();
+	store.beginTask(STANDALONE_WORKSPACE_ID);
+	const { id } = useDeepWorkStore.getState().task!;
+	store.updateTask(id, { stage: "chat", planningSessionId: "planner", title: "Design the report", notes: "Journal text" });
+	return id;
+}
+
+it("starts Planning Chat only on Continue, from the journal, and has no way back", async () => {
 	useDeepWorkStore.getState().beginTask(STANDALONE_WORKSPACE_ID);
 	launch.mockResolvedValue("planner");
 	renderPlanning();
@@ -82,110 +84,125 @@ it("starts the scoped Chat only on Continue and resends only new journal context
 	expect(within(screen.getByRole("region", { name: "Planning" })).getByText("Design the report")).toBeVisible();
 	expect(button("Go to Shallow")).toBeDisabled();
 	expect(useLaunch).not.toHaveBeenCalled();
-	expect(send).not.toHaveBeenCalled();
 
 	fireEvent.click(button("Continue"));
 	expect(await screen.findByText("Standard Chat planner")).toBeVisible();
 	expect(launch).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/Do not implement.*Private working notes.*Which format\?/s), {
 		clientRequestId: expect.any(String), replay: { agent: "codex", mode: "chat" }, attachments: [],
 	});
-	fireEvent.click(button("Back to journal"));
-	expect(screen.getByLabelText("Planning journal")).toHaveValue("Private working notes");
-	fireEvent.click(button("Continue"));
-	expect(await screen.findByText("Standard Chat planner")).toBeVisible();
-	expect(send).not.toHaveBeenCalled();
-	fireEvent.click(button("Back to journal"));
-	fireEvent.change(screen.getByLabelText("Planning journal"), { target: { value: "Private working notes\nUse a table." } });
-	send.mockResolvedValue({ turnId: "update" });
-	fireEvent.click(button("Continue"));
-	expect(await screen.findByText("Standard Chat planner")).toBeVisible();
-	const message = send.mock.calls[0][0].text;
-	expect(message).toContain("Use a table.");
-	expect(message).not.toContain("Private working notes");
-	expect(message).not.toContain("Which format?");
-	expect(send).toHaveBeenCalledTimes(1);
-	expect(launch).toHaveBeenCalledTimes(1);
+	expect(screen.queryByRole("button", { name: "Back to journal" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
 });
 
-it("prepares a review from the same Chat and launches only the exact confirmed handoff", async () => {
-	const store = useDeepWorkStore.getState();
-	store.beginTask(STANDALONE_WORKSPACE_ID);
-	const { id } = useDeepWorkStore.getState().task!;
-	store.updateTask(id, { stage: "chat", planningSessionId: "planner", notes: "Journal text" });
-	send.mockResolvedValue({ turnId: "prepare" });
-	const rerender = renderPlanning();
-	fireEvent.click(button("Prepare for worker"));
-	await waitFor(() => expect(useDeepWorkStore.getState().task?.generation?.turnId).toBe("prepare"));
-	expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("Do not implement") }));
-	expect(launch).not.toHaveBeenCalled();
-	chat.snapshot = {
-		sessionId: "planner",
-		turns: [{ id: "prepare", state: "completed" }],
-		items: [
-			{ kind: "message", role: "assistant", turnId: "other", text: "Unrelated answer" },
-			{ kind: "message", role: "assistant", turnId: "prepare", text: "Generated handoff" },
-		],
-	};
-	rerender();
-	expect(await screen.findByLabelText("Handoff prompt")).toHaveValue("Generated handoff");
-	expect(launch).not.toHaveBeenCalled();
-	fireEvent.change(screen.getByLabelText("Handoff prompt"), { target: { value: "Edited prompt.\n" } });
-	fireEvent.click(button("Back to Planning Chat"));
-	expect(await screen.findByText("Standard Chat planner")).toBeVisible();
-	fireEvent.click(button("Prepare for worker"));
-	expect(await screen.findByLabelText("Handoff prompt")).toHaveValue("Edited prompt.\n");
-	expect(send).toHaveBeenCalledTimes(1);
-
+it("launches the worker with exactly the typed handoff and stops, but does not delete, the planner", async () => {
+	openChatTask();
 	launch.mockResolvedValue("builder");
-	act(() => {
-		const confirm = button("Confirm and start worker");
-		confirm.click();
-		confirm.click();
-	});
+	renderPlanning();
+
+	expect(screen.queryByRole("button", { name: "Back to journal" })).toBeNull();
+	fireEvent.click(button("Hand off to worker"));
+	const dialog = await screen.findByRole("dialog");
+	expect(within(dialog).getByLabelText("Handoff")).toHaveValue("");
+	expect(within(dialog).getByRole("button", { name: "Start worker" })).toBeDisabled();
+
+	fireEvent.change(within(dialog).getByLabelText("Handoff"), { target: { value: "Build exactly this.\n" } });
+	fireEvent.click(within(dialog).getByRole("button", { name: "Start worker" }));
+
 	await waitFor(() => expect(useDeepWorkStore.getState().task).toBeUndefined());
-	expect(launch).toHaveBeenCalledExactlyOnceWith("Edited prompt.\n", expect.objectContaining({
+	expect(launch).toHaveBeenCalledExactlyOnceWith("Build exactly this.\n", expect.objectContaining({
 		clientRequestId: expect.any(String),
 		attachments: [],
 	}));
-	expect(kill).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", { params: { path: { sessionId: "planner" } } });
-	expect(remove).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", { params: { path: { sessionId: "planner" }, query: { cleanup: true } } });
+	expect(kill).toHaveBeenCalledExactlyOnceWith("/api/v1/sessions/{sessionId}/kill", { params: { path: { sessionId: "planner" } } });
+	expect(remove).not.toHaveBeenCalled();
 	expect(button("Go to Shallow")).toBeEnabled();
 });
 
-it("reuses a lost launch request and never starts a second worker on cleanup retry", async () => {
-	const store = useDeepWorkStore.getState();
-	store.beginTask(STANDALONE_WORKSPACE_ID);
-	const { id } = useDeepWorkStore.getState().task!;
-	store.updateTask(id, { stage: "handoff", planningSessionId: "planner", handoff: "Build it.", notes: "Keep until success" });
-	launch.mockRejectedValueOnce(new Error("Connection dropped")).mockResolvedValueOnce("builder");
-	remove.mockRejectedValueOnce(new Error("Cleanup pending"));
+it("keeps the handoff draft when the dialog is closed and reopened", async () => {
+	openChatTask();
 	renderPlanning();
 
-	fireEvent.click(button("Confirm and start worker"));
-	expect(await screen.findByRole("alert")).toHaveTextContent("Connection dropped");
-	expect(screen.getByLabelText("Handoff prompt")).toHaveValue("Build it.");
-	expect(kill).not.toHaveBeenCalled();
-	fireEvent.click(button("Retry Confirm"));
-	expect(await screen.findByRole("alert")).toHaveTextContent("Cleanup pending");
-	expect(launch.mock.calls[1]).toEqual(launch.mock.calls[0]);
-	expect(useDeepWorkStore.getState().task?.notes).toBe("Keep until success");
-	fireEvent.click(button("Retry cleanup"));
-	await waitFor(() => expect(useDeepWorkStore.getState().task).toBeUndefined());
-	expect(launch).toHaveBeenCalledTimes(2);
+	fireEvent.click(button("Hand off to worker"));
+	fireEvent.change(within(await screen.findByRole("dialog")).getByLabelText("Handoff"), { target: { value: "Draft prompt." } });
+	fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+	await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+	expect(useDeepWorkStore.getState().task?.handoff).toBe("Draft prompt.");
+
+	fireEvent.click(button("Hand off to worker"));
+	expect(within(await screen.findByRole("dialog")).getByLabelText("Handoff")).toHaveValue("Draft prompt.");
+	expect(launch).not.toHaveBeenCalled();
 });
 
-it("retries a failed generation on the same Chat without launching a worker", async () => {
-	const store = useDeepWorkStore.getState();
-	store.beginTask(STANDALONE_WORKSPACE_ID);
-	const { id } = useDeepWorkStore.getState().task!;
-	store.updateTask(id, { stage: "chat", planningSessionId: "planner" });
-	send.mockRejectedValueOnce(new Error("Connection dropped")).mockResolvedValueOnce({ turnId: "retry" });
+it("clears the task when stopping the planner fails, without a cleanup warning", async () => {
+	openChatTask();
+	launch.mockResolvedValue("builder");
+	kill.mockRejectedValueOnce(new Error("Kill failed"));
 	renderPlanning();
 
-	fireEvent.click(button("Prepare for worker"));
-	expect(await screen.findByRole("alert")).toHaveTextContent("Connection dropped");
-	fireEvent.click(button("Retry handoff request"));
-	await waitFor(() => expect(useDeepWorkStore.getState().task?.generation?.turnId).toBe("retry"));
-	expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
-	expect(launch).not.toHaveBeenCalled();
+	fireEvent.click(button("Hand off to worker"));
+	const dialog = await screen.findByRole("dialog");
+	fireEvent.change(within(dialog).getByLabelText("Handoff"), { target: { value: "Build it." } });
+	fireEvent.click(within(dialog).getByRole("button", { name: "Start worker" }));
+
+	await waitFor(() => expect(useDeepWorkStore.getState().task).toBeUndefined());
+	expect(launch).toHaveBeenCalledTimes(1);
+	expect(screen.queryByText(/cleanup/i)).toBeNull();
+	expect(remove).not.toHaveBeenCalled();
+});
+
+it("does not stop a planner that has already ended", async () => {
+	openChatTask();
+	launch.mockResolvedValue("builder");
+	read.mockResolvedValue({ data: { session: { isTerminated: true } }, response: { status: 200 } });
+	renderPlanning();
+
+	fireEvent.click(button("Hand off to worker"));
+	const dialog = await screen.findByRole("dialog");
+	fireEvent.change(within(dialog).getByLabelText("Handoff"), { target: { value: "Build it." } });
+	fireEvent.click(within(dialog).getByRole("button", { name: "Start worker" }));
+
+	await waitFor(() => expect(useDeepWorkStore.getState().task).toBeUndefined());
+	expect(kill).not.toHaveBeenCalled();
+});
+
+it("reuses the same worker request after a lost launch response", async () => {
+	openChatTask();
+	launch.mockRejectedValueOnce(new Error("Connection dropped")).mockResolvedValueOnce("builder");
+	renderPlanning();
+
+	fireEvent.click(button("Hand off to worker"));
+	const dialog = await screen.findByRole("dialog");
+	fireEvent.change(within(dialog).getByLabelText("Handoff"), { target: { value: "Build it." } });
+	fireEvent.click(within(dialog).getByRole("button", { name: "Start worker" }));
+	expect(await within(dialog).findByRole("alert")).toHaveTextContent("Connection dropped");
+	expect(within(dialog).getByLabelText("Handoff")).toHaveValue("Build it.");
+	expect(kill).not.toHaveBeenCalled();
+
+	fireEvent.click(within(dialog).getByRole("button", { name: "Start worker" }));
+	await waitFor(() => expect(useDeepWorkStore.getState().task).toBeUndefined());
+	expect(launch).toHaveBeenCalledTimes(2);
+	expect(launch.mock.calls[1]).toEqual(launch.mock.calls[0]);
+});
+
+it("discards a Planning Chat after confirmation, stopping but not deleting the planner", async () => {
+	openChatTask();
+	renderPlanning();
+
+	fireEvent.click(button("Discard task"));
+	fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Discard task" }));
+
+	await waitFor(() => expect(useDeepWorkStore.getState().task).toBeUndefined());
+	expect(kill).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", { params: { path: { sessionId: "planner" } } });
+	expect(remove).not.toHaveBeenCalled();
+});
+
+it("discards a journal without a planner after confirmation", async () => {
+	useDeepWorkStore.getState().beginTask(STANDALONE_WORKSPACE_ID);
+	renderPlanning();
+
+	fireEvent.click(button("Discard task"));
+	fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Discard task" }));
+
+	await waitFor(() => expect(useDeepWorkStore.getState().task).toBeUndefined());
+	expect(kill).not.toHaveBeenCalled();
 });
